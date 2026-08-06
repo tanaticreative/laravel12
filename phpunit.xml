@@ -19,12 +19,17 @@
     </source>
     <php>
         <env name="APP_ENV" value="testing"/>
+        <!-- Error bodies must be the ones clients actually see: with debug on,
+             every failure carries a stack trace and no two 404s look alike. -->
+        <env name="APP_DEBUG" value="false"/>
         <env name="APP_MAINTENANCE_DRIVER" value="file"/>
         <env name="BCRYPT_ROUNDS" value="4"/>
         <env name="BROADCAST_CONNECTION" value="null"/>
         <env name="CACHE_STORE" value="array"/>
-        <env name="DB_CONNECTION" value="sqlite"/>
-        <env name="DB_DATABASE" value=":memory:"/>
+        <!-- MySQL rather than in-memory SQLite: the slots table carries CHECK
+             constraints added by raw ALTER TABLE, which SQLite cannot build. -->
+        <env name="DB_CONNECTION" value="mysql"/>
+        <env name="DB_DATABASE" value="testing"/>
         <env name="DB_URL" value=""/>
         <env name="MAIL_MAILER" value="array"/>
         <env name="QUEUE_CONNECTION" value="sync"/>

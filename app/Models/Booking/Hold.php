@@ -7,7 +7,38 @@ use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Support\Carbon;
 
+/**
+ * @property int $id
+ * @property int $slot_id
+ * @property string $actor_key
+ * @property string $idempotency_key
+ * @property string $request_cache
+ * @property HoldStatus $status
+ * @property Carbon $expires_at
+ * @property Carbon|null $confirmed_at
+ * @property Carbon|null $cancelled_at
+ * @property Carbon|null $created_at
+ * @property Carbon|null $updated_at
+ * @property-read \App\Models\Booking\Slot $slot
+ * @method static Builder<static>|Hold active()
+ * @method static Builder<static>|Hold newModelQuery()
+ * @method static Builder<static>|Hold newQuery()
+ * @method static Builder<static>|Hold query()
+ * @method static Builder<static>|Hold whereActorKey($value)
+ * @method static Builder<static>|Hold whereCancelledAt($value)
+ * @method static Builder<static>|Hold whereConfirmedAt($value)
+ * @method static Builder<static>|Hold whereCreatedAt($value)
+ * @method static Builder<static>|Hold whereExpiresAt($value)
+ * @method static Builder<static>|Hold whereId($value)
+ * @method static Builder<static>|Hold whereIdempotencyKey($value)
+ * @method static Builder<static>|Hold whereRequestCache($value)
+ * @method static Builder<static>|Hold whereSlotId($value)
+ * @method static Builder<static>|Hold whereStatus($value)
+ * @method static Builder<static>|Hold whereUpdatedAt($value)
+ * @mixin \Eloquent
+ */
 class Hold extends Model
 {
     use HasFactory;

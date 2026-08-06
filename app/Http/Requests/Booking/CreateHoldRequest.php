@@ -2,7 +2,8 @@
 
 namespace App\Http\Requests\Booking;
 
-use Illuminate\Contracts\Validation\ValidationRule;
+use App\Models\Booking\Hold;
+use App\Support\Booking\ActorKey;
 use Illuminate\Foundation\Http\FormRequest;
 
 class CreateHoldRequest extends FormRequest
@@ -36,5 +37,29 @@ class CreateHoldRequest extends FormRequest
     public function idempotencyKey(): string
     {
         return $this->validated('idempotency_key');
+    }
+
+
+    /**
+     * Who this key belongs to.
+     *
+     * An Idempotency-Key is not a credential — anyone can invent one — so it
+     * is namespaced by the caller's identity. Authentication decides *who*;
+     * the key only decides *whether this is a retry*.
+     */
+    public function actorKey(): string
+    {
+        return ActorKey::for($this);
+    }
+
+    /**
+     * Fingerprint of what was actually asked for, so replaying a key with a
+     * different payload can be told apart from a genuine retry.
+     */
+    public function payloadFingerprint(int $slotId): string
+    {
+        return Hold::fingerprint([
+                'slot_id' => $slotId,
+            ] + $this->except('idempotency_key'));
     }
 }

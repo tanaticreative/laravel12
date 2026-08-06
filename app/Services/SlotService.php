@@ -17,7 +17,7 @@ use Illuminate\Support\Facades\Log;
 
 class SlotService
 {
-    public function __construct(private readonly AvailabilityCacheService $cache) {}
+    public function __construct(private readonly AvailabilityCacheService $cacheService) {}
 
     /**
      * Availability for every slot, cached for 5-15 seconds.
@@ -26,7 +26,7 @@ class SlotService
      */
     public function availability(): array
     {
-        return $this->cache->remember(fn () => $this->readAvailability());
+        return $this->cacheService->remember(fn () => $this->readAvailability());
     }
 
     /**
@@ -83,7 +83,7 @@ class SlotService
         // Only after the transaction committed: a rollback must not leave the
         // cache cleared against unchanged data, and events must not fire for
         // work that never happened.
-        $this->cache->invalidate();
+        $this->cacheService->invalidate();
         HoldCreated::dispatch($hold);
 
         return ['hold' => $hold, 'replayed' => false];
@@ -135,7 +135,7 @@ class SlotService
         });
 
         if ($changed) {
-            $this->cache->invalidate();
+            $this->cacheService->invalidate();
             HoldConfirmed::dispatch($hold);
         }
 
@@ -186,7 +186,7 @@ class SlotService
         });
 
         if ($changed) {
-            $this->cache->invalidate();
+            $this->cacheService->invalidate();
             HoldCancelled::dispatch($hold);
         }
 

@@ -17,15 +17,15 @@ return new class extends Migration
             $table->unsignedInteger('capacity')->default(0);
 
             // Seats left after confirmations.
-            $table->unsignedInteger('available')->default(0);
+            $table->unsignedInteger('remaining')->default(0);
             $table->timestamps();
         });
 
         //if not preorder
         //final defense
 
-        DB::statement('ALTER TABLE slots ADD CONSTRAINT slots_remaining_not_negative CHECK (available >= 0)');
-        DB::statement('ALTER TABLE slots ADD CONSTRAINT slots_remaining_within_capacity CHECK (available <= capacity)');
+        DB::statement('ALTER TABLE slots ADD CONSTRAINT slots_remaining_not_negative CHECK (remaining >= 0)');
+        DB::statement('ALTER TABLE slots ADD CONSTRAINT slots_remaining_within_capacity CHECK (remaining <= capacity)');
     }
 
     /**

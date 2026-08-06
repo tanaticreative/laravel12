@@ -20,7 +20,7 @@ return new class extends Migration
             $table->uuid('idempotency_key');
             //extra check for duplicate requests
             // if the same key but a different payload is rejected
-            $table->char('request_cache',64);
+            $table->char('request_hash',64);
             $table->enum('status', [HoldStatus::Held, HoldStatus::Confirmed, HoldStatus::Cancelled])->default(HoldStatus::Held);
             $table->timestamp('expires_at');
             $table->timestamp('confirmed_at')->nullable();
