@@ -21,5 +21,9 @@ class DatabaseSeeder extends Seeder
             'name' => 'Test User',
             'email' => 'test@example.com',
         ]);
+
+        // Without this call the booking tables come up empty, so a fresh
+        // `migrate --seed` hands you an API whose every read returns [].
+        $this->call(SlotSeeder::class);
     }
 }

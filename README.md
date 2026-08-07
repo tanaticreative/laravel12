@@ -1,59 +1,634 @@
-<p align="center"><a href="https://laravel.com" target="_blank"><img src="https://raw.githubusercontent.com/laravel/art/master/logo-lockup/5%20SVG/2%20CMYK/1%20Full%20Color/laravel-logolockup-cmyk-red.svg" width="400" alt="Laravel Logo"></a></p>
+# Slots & Holds API
 
-<p align="center">
-<a href="https://github.com/laravel/framework/actions"><img src="https://github.com/laravel/framework/workflows/tests/badge.svg" alt="Build Status"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/dt/laravel/framework" alt="Total Downloads"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/v/laravel/framework" alt="Latest Stable Version"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/l/laravel/framework" alt="License"></a>
-</p>
+Сервис бронирования слотов на Laravel 12 (PHP 8.3+) и MySQL 8+.
 
-## About Laravel
+Реализовано: кеш доступности с защитой от cache stampede, идемпотентное создание
+холдов, атомарное подтверждение с защитой от оверсела.
 
-Laravel is a web application framework with expressive, elegant syntax. We believe development must be an enjoyable and creative experience to be truly fulfilling. Laravel takes the pain out of development by easing common tasks used in many web projects, such as:
+---
 
-- [Simple, fast routing engine](https://laravel.com/docs/routing).
-- [Powerful dependency injection container](https://laravel.com/docs/container).
-- Multiple back-ends for [session](https://laravel.com/docs/session) and [cache](https://laravel.com/docs/cache) storage.
-- Expressive, intuitive [database ORM](https://laravel.com/docs/eloquent).
-- Database agnostic [schema migrations](https://laravel.com/docs/migrations).
-- [Robust background job processing](https://laravel.com/docs/queues).
-- [Real-time event broadcasting](https://laravel.com/docs/broadcasting).
+## Требования
 
-Laravel is accessible, powerful, and provides tools required for large, robust applications.
+* PHP 8.3+ (`composer.json`: `"php": "^8.3"`)
+* MySQL 8+
+* Redis — для кеша и атомарных блокировок (можно заменить, см. [Кеш](#кеш-и-защита-от-stampede))
 
-## Learning Laravel
+---
 
-Laravel has the most extensive and thorough [documentation](https://laravel.com/docs) and video tutorial library of all modern web application frameworks, making it a breeze to get started with the framework. You can also check out [Laravel Learn](https://laravel.com/learn), where you will be guided through building a modern Laravel application.
+## Запуск
 
-If you don't feel like reading, [Laracasts](https://laracasts.com) can help. Laracasts contains thousands of video tutorials on a range of topics including Laravel, modern PHP, unit testing, and JavaScript. Boost your skills by digging into our comprehensive video library.
+### Вариант 1: локальный PHP
 
-## Laravel Sponsors
+```bash
+cp .env.example .env
+composer install
+php artisan key:generate
 
-We would like to extend our thanks to the following sponsors for funding Laravel development. If you are interested in becoming a sponsor, please visit the [Laravel Partners program](https://partners.laravel.com).
+php artisan migrate
+php artisan db:seed          # тестовые слоты для примеров ниже
 
-### Premium Partners
+php artisan serve
+```
 
-- **[Vehikl](https://vehikl.com)**
-- **[Tighten Co.](https://tighten.co)**
-- **[Kirschbaum Development Group](https://kirschbaumdevelopment.com)**
-- **[64 Robots](https://64robots.com)**
-- **[Curotec](https://www.curotec.com/services/technologies/laravel)**
-- **[DevSquad](https://devsquad.com/hire-laravel-developers)**
-- **[Redberry](https://redberry.international/laravel-development)**
-- **[Active Logic](https://activelogic.com)**
+Приложение поднимется на `http://127.0.0.1:8000`.
 
-## Contributing
+Перед миграцией укажите доступы к своей базе в `.env`:
 
-Thank you for considering contributing to the Laravel framework! The contribution guide can be found in the [Laravel documentation](https://laravel.com/docs/contributions).
+```dotenv
+DB_CONNECTION=mysql
+DB_HOST=127.0.0.1
+DB_PORT=3306
+DB_DATABASE=laravel
+DB_USERNAME=root
+DB_PASSWORD=
+```
 
-## Code of Conduct
+### Вариант 2: Docker (PHP на хосте не нужен)
 
-In order to ensure that the Laravel community is welcoming to all, please review and abide by the [Code of Conduct](https://laravel.com/docs/contributions#code-of-conduct).
+```bash
+./scripts/init.sh
+```
 
-## Security Vulnerabilities
+Скрипт поднимет MySQL, Redis, Mailpit и приложение через Laravel Sail,
+выполнит миграции и установит зависимости. Приложение будет на
+`http://localhost`. Дальше artisan вызывается через Sail:
 
-If you discover a security vulnerability within Laravel, please send an e-mail to Taylor Otwell via [taylor@laravel.com](mailto:taylor@laravel.com). All security vulnerabilities will be promptly addressed.
+```bash
+./vendor/bin/sail artisan migrate
+./vendor/bin/sail artisan db:seed
+```
 
-## License
+> **Внимание:** значения `DB_HOST=mysql` и `REDIS_HOST=redis` в `.env.example`
+> рассчитаны на Sail (это имена сервисов Docker). Для локального PHP замените
+> их на `127.0.0.1`.
 
-The Laravel framework is open-sourced software licensed under the [MIT license](https://opensource.org/licenses/MIT).
+---
+
+## Эндпоинты
+
+Маршруты объявлены в `routes/api.php` **без префикса `/api`** — ровно так, как в
+задании. Префикс задаётся в `bootstrap/app.php` (`apiPrefix: ''`); чтобы вернуть
+стандартный `/api`, поменяйте значение на `'api'`.
+
+| Метод    | Путь                  | Назначение                       |
+| -------- | --------------------- | -------------------------------- |
+| `GET`    | `/slots/availability` | Доступные слоты (кеш 5–15 сек)   |
+| `POST`   | `/slots/{id}/hold`    | Создать холд (`Idempotency-Key`) |
+| `POST`   | `/holds/{id}/confirm` | Подтвердить холд                 |
+| `DELETE` | `/holds/{id}`         | Отменить холд                    |
+
+---
+
+## Примеры curl
+
+Ниже `BASE=http://localhost` (для `php artisan serve` — `http://127.0.0.1:8000`).
+
+```bash
+BASE=http://localhost
+```
+
+### 1. Доступные слоты
+
+```bash
+curl -s $BASE/slots/availability
+```
+
+```json
+[
+  {"slot_id":1,"capacity":10,"remaining":6},
+  {"slot_id":2,"capacity":5,"remaining":0},
+  {"slot_id":3,"capacity":1,"remaining":1}
+]
+```
+
+### 2. Создание холда
+
+```bash
+KEY=$(uuidgen)
+
+curl -i -X POST $BASE/slots/1/hold \
+  -H "Idempotency-Key: $KEY" \
+  -H 'Accept: application/json'
+```
+
+```
+HTTP/1.1 201 Created
+Idempotent-Replay: false
+
+{"hold_id":1,"slot_id":1,"status":"held","expires_at":"2026-08-05T15:07:51+00:00"}
+```
+
+### 3. Повтор с тем же ключом (идемпотентность)
+
+> Ответы холдов — плоские объекты без обёртки `data`: `JsonResource::withoutWrapping()`
+> в `AppServiceProvider`, чтобы формат совпадал с выдачей доступности.
+
+
+```bash
+curl -i -X POST $BASE/slots/1/hold \
+  -H "Idempotency-Key: $KEY" \
+  -H 'Accept: application/json'
+```
+
+Возвращается **тот же** `hold_id`, новая запись не создаётся. Отличается только
+статус — `200` вместо `201`:
+
+```
+HTTP/1.1 200 OK
+Idempotent-Replay: true
+
+{"hold_id":1,"slot_id":1,"status":"held","expires_at":"2026-08-05T15:07:51+00:00"}
+```
+
+### 4. Подтверждение
+
+```bash
+curl -i -X POST $BASE/holds/1/confirm -H 'Accept: application/json'
+```
+
+```
+HTTP/1.1 200 OK
+
+{"hold_id":1,"slot_id":1,"status":"confirmed","expires_at":"2026-08-05T15:07:51+00:00"}
+```
+
+Повторное подтверждение возвращает `200` и не уменьшает остаток второй раз.
+
+### 5. Отмена
+
+```bash
+curl -i -X DELETE $BASE/holds/1 -H 'Accept: application/json'
+```
+
+```
+HTTP/1.1 200 OK
+
+{"hold_id":1,"slot_id":1,"status":"cancelled","expires_at":"2026-08-05T15:07:51+00:00"}
+```
+
+Место возвращается в доступ, кеш инвалидируется.
+
+### 6. Конфликт при оверселе
+
+Слот 2 в сидере создан без свободных мест (`remaining: 0`):
+
+```bash
+curl -i -X POST $BASE/slots/2/hold \
+  -H "Idempotency-Key: $(uuidgen)" \
+  -H 'Accept: application/json'
+```
+
+```
+HTTP/1.1 409 Conflict
+
+{"error":"slot_sold_out","message":"Slot 2 has no seats left."}
+```
+
+**Проверка гонки.** Слот 3 имеет ровно одно место — 30 параллельных запросов
+дадут ровно один `201`:
+
+```bash
+seq 30 | xargs -P 30 -I{} sh -c \
+  'curl -s -o /dev/null -w "%{http_code}\n" -X POST '"$BASE"'/slots/3/hold \
+     -H "Idempotency-Key: $(uuidgen)" -H "Accept: application/json"' \
+  | sort | uniq -c
+```
+
+```
+      1 201
+     29 409
+```
+
+---
+
+## Как это работает
+
+### Семантика `remaining`
+
+* Колонка `slots.remaining` — места, оставшиеся **после подтверждений**.
+* В выдаче `GET /slots/availability` из неё дополнительно вычитаются живые
+  холды. Место, которое кто-то держит, не предлагается другому клиенту.
+
+```
+remaining (в ответе) = slots.remaining − количество активных холдов
+```
+
+Поэтому создание холда тоже инвалидирует кеш: оно меняет число, которое мы
+публикуем.
+
+### Идемпотентность
+
+Ключ хранится в `holds.idempotency_key` с **уникальным индексом** — именно он
+даёт гарантию, а не проверка «есть ли уже такая запись». Два одновременных
+запроса с одним ключом гонятся за вставку: один побеждает, второй получает
+ошибку уникальности, перечитывает запись победителя и возвращает её.
+Проверено: 20 параллельных процессов с одним ключом → 1 строка в БД.
+
+**Idempotency-Key — не токен доступа.** Клиент придумывает его сам, поэтому
+ключ не может ничего разрешать. Он отвечает ровно на один вопрос: «это повтор
+того же запроса?» Отсюда два ограничения:
+
+1. **Ключ привязан к вызывающему.** Уникальность — `UNIQUE(actor_key,
+   idempotency_key)`, а не по одному ключу глобально. Подобрав чужой ключ,
+   клиент получит свой собственный холд, а не чужой. `actor_key` — это
+   `user:{id}` при аутентификации и `ip:{адрес}` без неё; с реальным auth-слоем
+   он превращается в обычный `user_id`.
+2. **Ключ привязан к payload.** В `holds.request_hash` лежит SHA-256 запроса.
+   Повтор ключа с другими данными — не retry, а ошибка клиента:
+   `422 idempotency_key_reused`. Иначе сервер ответил бы на вопрос, которого
+   ему не задавали (так же делает Stripe).
+
+
+
+### Защита от оверсела
+
+Подтверждение уменьшает счётчик одним атомарным запросом, где проверка живёт в
+`WHERE`:
+
+```sql
+UPDATE slots SET remaining = remaining - 1 WHERE id = ? AND remaining > 0
+```
+
+Проигравшие в гонке обновляют 0 строк и получают `409`. Создание холда
+сериализуется через `SELECT ... FOR UPDATE` по строке слота, так что
+параллельные холды не могут «не заметить» друг друга при подсчёте.
+
+Ниже приложения стоит ещё один рубеж — ограничения самой БД:
+
+```sql
+remaining INT UNSIGNED
+CHECK (remaining >= 0)
+CHECK (remaining <= capacity)
+```
+
+Это не дублирование, а разные уровни: приложение возвращает клиенту осмысленный
+`409`, а БД гарантирует, что оверсел нельзя записать даже кривым `UPDATE` руками
+или багом в новом коде. При мутационной проверке (удалил guard `remaining > 0`)
+именно CHECK перехватил оверсел — транзакции упали с ошибкой вместо записи
+отрицательного остатка.
+
+### Route model binding
+
+Контроллеры принимают модели, а не идентификаторы:
+
+```php
+public function store(CreateHoldRequest $request, Slot $slot)
+public function confirm(Hold $hold)
+```
+
+Несуществующий слот или холд отсекается биндингом до контроллера — `404`
+приходит из фреймворка, а сервису не нужен отдельный код на этот случай.
+
+Важное следствие для конкурентности: **связанная модель прочитана до
+транзакции**, поэтому решения на ней принимать нельзя. Она используется только
+чтобы понять, *какую* строку блокировать; статус, срок и остаток перечитываются
+внутри транзакции под `lockForUpdate`. Единственное, что берётся из связанной
+копии, — `slot_id` (он неизменен у существующего холда).
+
+Побочный эффект: `SubstituteBindings` отрабатывает раньше валидации, поэтому
+запрос к несуществующему слоту без заголовка `Idempotency-Key` вернёт `404`, а
+не `422` — вопрос о существовании ресурса задаётся первым. Зафиксировано тестом
+`binding_resolves_before_validation`.
+
+### Ownership: кто может трогать холд
+
+Знание `hold_id` не даёт права на действия с ним. `HoldPolicy` подключена
+декларативно в маршрутах:
+
+```php
+->can('confirm', 'hold')
+->can('cancel', 'hold')
+```
+
+Владелец определяется через `App\Support\ActorKey` — **единственное** место, где
+описано «кто такой вызывающий». Создание холда штампует `actor_key` в строку,
+policy сравнивает с ним же. Две копии этого правила неизбежно разъехались бы, и
+проверка тихо перестала бы работать.
+
+**Отказ возвращает `404`, а не `403`** (`Response::denyAsNotFound()`). Id холдов
+— последовательные целые, поэтому `403` подтверждал бы «такой холд есть, но
+чужой» и превращал ручку в оракул для перебора. Чтобы это работало, все `404`
+приведены к одному телу middleware'ом `UniformNotFoundResponse`:
+
+```json
+{"error": "not_found", "message": "Not Found"}
+```
+
+Middleware матчится по **HTTP-статусу, а не по классу исключения**: к моменту,
+когда ответ идёт наружу, отсутствующая модель уже стала `NotFoundHttpException`,
+а отказ policy — «голым» `HttpException`. Ловля по классам пропустила бы второй
+случай, и ответы снова стали бы различимы. По умолчанию тела различаются:
+Laravel называет модель и id («No query results for model [Hold] 999999»), а
+отказ policy отвечает «Not Found» — эта разница и выдавала бы существование
+чужого холда.
+
+Переписывание идёт **поверх готового ответа**, а не через `try/catch`:
+`Illuminate\Routing\Pipeline` перехватывает исключение там, где оно брошено, и
+превращает его в ответ, который затем возвращается наружу через middleware. Тело
+подменяется на месте (`setData`), иначе новый ответ потерял бы заголовки
+`X-RateLimit-*`, навешенные по дороге.
+
+Зафиксировано тестом `a_denied_hold_is_indistinguishable_from_a_missing_one`,
+который сравнивает и статус, и тело.
+
+> **Ограничение.** Без auth-слоя владелец — это IP (`ip:{адрес}`). За обратным
+> прокси или балансировщиком все запросы придут с одного адреса, все гости
+> станут одним актором, и проверка выродится. Настройте `TrustProxies`
+> (`$middleware->trustProxies(...)` в `bootstrap/app.php`), а лучше — включите
+> нормальную аутентификацию: тогда `ActorKey` вернёт `user:{id}` и всё
+> заработает как задумано, код менять не нужно.
+
+### Порядок блокировок
+
+Все пишущие пути берут блокировки **в одном порядке: сначала слот, потом холд.**
+
+```
+Slot (lockForUpdate)
+  ↓
+Hold (lockForUpdate)
+```
+
+Если бы создание брало slot → hold, а подтверждение hold → slot, две
+транзакции могли бы взаимно заблокироваться. Поэтому `confirm` и `cancel`
+сначала выясняют `slot_id` незалоченным чтением, блокируют слот и только затем
+холд (`SlotService::lockSlotThenHold()`). Отдельный тест
+`mixed_creates_and_confirms_do_not_deadlock` гоняет создания и подтверждения
+вперемешку и падает, если порядок разъедется.
+
+Проверено: 8 параллельных подтверждений при 3 свободных местах → ровно 3 успеха,
+5 конфликтов, `remaining = 0`.
+
+### Состояния
+
+Статус — enum `App\Enums\HoldStatus`, а не строка. Разрешённые переходы описаны
+в одном месте, в `allowedTransitions()`:
+
+```
+held ──> confirmed ──> cancelled
+  └────> cancelled
+```
+
+Обратные переходы невозможны: `cancelled → confirmed` даёт
+`409 illegal_transition`. Истечение срока намеренно не входит в матрицу
+переходов — клиенту важно различать «неверное состояние» (`409`) и «поздно»
+(`410`).
+
+### Кеш и защита от stampede
+
+Ключ `slots:availability`, TTL — случайные **5–15 секунд** (разброс не даёт
+ключам протухать синхронно).
+
+Схема single-flight:
+
+1. Есть значение в кеше → отдаём его.
+2. Промах → один воркер берёт блокировку `Cache::lock` и пересчитывает.
+3. Остальные **не идут в базу**, а отдают последнюю известную копию
+   (`slots:availability:stale`, TTL 5 минут).
+4. Только на полностью холодном кеше читатели ждут победителя (до 3 секунд).
+
+Замер под нагрузкой: 50 параллельных запросов на холодном кеше стоили
+**2 SELECT** вместо ~50.
+
+Инвалидация после создания, подтверждения и отмены удаляет **обе** копии —
+после записи stale-копия заведомо неверна, отдавать её нельзя.
+
+Инвалидация вызывается **после коммита**, а не внутри транзакции: при откате
+кеш оказался бы сброшен для данных, которые не менялись. По той же причине
+после коммита отправляются и события.
+
+Остаётся известная гонка «читатель прочитал БД до коммита, записал кеш после
+инвалидации» — тогда устаревшее значение живёт до конца TTL, то есть не больше
+15 секунд. Лечится версионированием ключа; для текущих требований цена выше
+пользы.
+
+Нужны атомарные блокировки, поэтому используется Redis (`CACHE_STORE=redis`).
+Драйвер `database` тоже поддерживает блокировки (таблица `cache_locks`), код
+менять не придётся — а вот `array` и `file` для продакшена не годятся.
+
+### Время жизни холда
+
+5 минут (`Hold::TTL_MINUTES`). Просроченные холды не удаляются фоновой задачей:
+они просто перестают попадать в скоуп `Hold::active()`, поэтому место
+освобождается само. Подтверждение просроченного холда → `410 hold_expired`.
+
+---
+
+## Коды ответов
+
+| Код   | Когда                                                                     |
+| ----- | ------------------------------------------------------------------------- |
+| `200` | Успех; повтор по идемпотентному ключу; повторное подтверждение/отмена      |
+| `201` | Холд создан                                                               |
+| `404` | Слот или холд не найден **либо принадлежит другому актору**                |
+| `409` | `slot_sold_out`, `illegal_transition` — состояние мира изменилось          |
+| `410` | `hold_expired` — холд существовал, но истёк и не вернётся                  |
+| `422` | Некорректный `Idempotency-Key`; `idempotency_key_reused` — ключ с другим payload |
+| `429` | Превышен rate limit                                                       |
+| `500` | `server_error` — сбой, который никто не моделировал                        |
+
+Тело ошибки `409`:
+
+```json
+{"error": "slot_sold_out", "message": "Slot 2 has no seats left."}
+```
+
+### Внутренние ошибки наружу не выходят
+
+Любой `5xx` — это сбой вне модели предметной области: упавшее соединение,
+отсутствующая таблица, баг. Laravel по умолчанию отвечает на такое сообщением
+самого исключения, а у `QueryException` это SQL, имя соединения, хост и база —
+готовая карта инфраструктуры для того, кто её запросил. `UniformServerErrorResponse`
+приводит все такие ответы к одному телу:
+
+```json
+{"error": "server_error", "message": "Server Error"}
+```
+
+Маскировка **намеренно не завязана на `APP_DEBUG`**. Отдавать причину «только
+локально» значило бы поставить гарантию в зависимость от одной переменной
+окружения, правильной на каждом деплое; первый же неверный `.env` опубликовал бы
+схему и доступы. Причина при этом не теряется: обработчик репортит исключение до
+рендера, поэтому полный стек-трейс лежит в `storage/logs/laravel.log` — канал,
+который клиенту недоступен.
+
+`ApiException` это не затрагивает: `Handler::render()` вызывает метод `render()`
+на самом исключении раньше, чем доходит до middleware, так что смоделированные
+`409`/`410`/`422` проходят как есть. Закреплено `ServerErrorTest`, в том числе
+случаем с принудительно включённым `app.debug`.
+
+Заголовок `Accept` посылать не обязательно: `ForceJsonResponse` в api-группе
+проставляет его сам. Без этого Laravel применил бы к API своё веб-поведение —
+HTML-страницу на `404` и, что хуже, **`302 redirect` вместо `422`** при ошибке
+валидации. Закреплено тестом `errors_stay_json_without_an_accept_header`.
+
+---
+
+## Структура
+
+```
+app/Http/Controllers/Api/Booking/AvailabilityController.php  GET /slots/availability
+app/Http/Controllers/Api/Booking/HoldController.php          создание/подтверждение/отмена
+app/Http/Requests/Booking/CreateHoldRequest.php              валидация ключа, actor, хеш payload
+app/Http/Resources/Booking/HoldResource.php                  формат ответа
+app/Services/SlotService.php                                 транзакции, блокировки, идемпотентность
+app/Services/AvailabilityCacheService.php                    кеш и single-flight
+app/Http/Middleware/ForceJsonResponse.php                    API всегда отвечает JSON
+app/Http/Middleware/UniformNotFoundResponse.php              все 404 — одно тело
+app/Http/Middleware/UniformServerErrorResponse.php           внутренние ошибки не выходят наружу
+app/Policies/Booking/HoldPolicy.php                          ownership: чужой холд = 404
+app/Support/Booking/ActorKey.php                             единственное определение «кто вызывающий»
+app/Enums/HoldStatus.php                                     состояния и переходы
+app/Models/Booking/Slot.php, app/Models/Booking/Hold.php
+app/Events/Booking/Hold{Created,Confirmed,Cancelled}.php
+app/Listeners/Booking/LogHoldActivity.php                    аудит жизненного цикла
+app/Exceptions/Booking/ApiException.php                      409/410/422 с машинным кодом
+app/Providers/AppServiceProvider.php                         JsonResource::withoutWrapping()
+app/Providers/AuthServiceProvider.php                        регистрация HoldPolicy
+config/booking.php                                           rate limits
+database/migrations/*_create_slots_table.php
+database/migrations/*_create_holds_table.php
+database/seeders/SlotSeeder.php                              вызывается из DatabaseSeeder
+routes/api.php
+tests/Feature/{AvailabilityTest,HoldTest,HoldOwnershipTest,ConcurrencyTest,ServerErrorTest}.php
+```
+
+> `app/Http/Requests/Booking/AvailabilityRequest.php` и секция
+> `booking.availability` в конфиге — заготовка пагинации: класс написан, но
+> `AvailabilityController::index()` его не принимает и отдаёт весь список.
+> Пока это мёртвый код, а не поведение API.
+
+### Схема БД
+
+**slots**
+
+| Колонка     | Тип               |
+| ----------- | ----------------- |
+| `id`        | bigint PK         |
+| `name`      | varchar, nullable |
+| `capacity`  | int unsigned      |
+| `remaining` | int unsigned      |
+
+**holds**
+
+| Колонка           | Тип                                    |
+| ----------------- | -------------------------------------- |
+| `id`              | bigint PK                              |
+| `slot_id`         | FK → `slots.id`, cascade on delete     |
+| `actor_key`       | varchar — `user:{id}` или `ip:{адрес}` |
+| `idempotency_key` | uuid                                   |
+| `request_hash`    | char(64), SHA-256 запроса              |
+| `status`          | enum: `held`, `confirmed`, `cancelled` |
+| `expires_at`      | timestamp                              |
+| `confirmed_at`    | timestamp, nullable                    |
+| `cancelled_at`    | timestamp, nullable                    |
+
+* `UNIQUE(actor_key, idempotency_key)` — гарантия идемпотентности, ключи
+  разделены между вызывающими.
+* Индекс `(slot_id, status, expires_at)` — под подсчёт живых холдов.
+
+---
+
+## Тесты
+
+```bash
+php artisan test
+# или
+./vendor/bin/sail artisan test
+```
+
+44 теста, включая **настоящие конкурентные**: `ConcurrencyTest` через
+`pcntl_fork` поднимает параллельные процессы с отдельными соединениями к БД,
+поэтому транзакции реально гоняются. `RefreshDatabase` там намеренно не
+используется — обёрточная транзакция скрыла бы работу процессов друг от друга и
+превратила гонку в последовательность.
+
+Тесты проверены мутациями: если убрать `lockForUpdate` при создании холда или
+guard `remaining > 0` при подтверждении, соответствующие тесты падают.
+
+---
+
+## Нагрузочные проверки
+
+```bash
+./scripts/load-all.sh                                  # всё сразу
+./scripts/load-stampede.sh --concurrency 100 --duration 30
+./scripts/load-idempotency.sh --concurrency 100
+./scripts/load-oversell.sh --concurrency 50
+```
+
+Скрипты бьют по работающему приложению (`BASE_URL`, по умолчанию
+`http://localhost`), заводят собственные слоты с именем `loadtest` и удаляют их
+за собой. Реальные данные не трогаются.
+
+Результат последнего прогона (30 воркеров):
+
+| Проверка                          | Результат                                  |
+| --------------------------------- | ------------------------------------------ |
+| Залп на холодном кеше             | 30 читателей → **2** запроса к БД          |
+| Нагрузка 12 с                     | 3508 запросов (~292/с) → **2** запроса к БД |
+| Один ключ, 30 одновременных       | 1 строка в БД, 1×201, 29×200               |
+| 30 разных ключей                  | 30 холдов, 30 разных id                    |
+| 30 холдов на одно место           | 1×201, 29×409                              |
+| 30 подтверждений на 6 мест        | 6 подтверждено, 24 отказа, остаток 0       |
+
+**Про лимиты.** Нагружать ручку, которая намеренно ограничена rate limit'ом, —
+значит измерять лимитер, а не то, что проверяется. Скрипты временно поднимают
+лимиты в `.env` и возвращают их обратно по `trap EXIT`, так что даже прерванный
+прогон не оставит конфиг изменённым. Флаг `--keep-limits` отключает это.
+
+> **Осторожно:** `php artisan serve` следит за `.env` по mtime и **перезапускается
+> при любом изменении**, обрывая соединения. Скрипты после правки конфига ждут
+> возвращения приложения — без этой паузы весь залп выглядит как отказы
+> приложения, хотя это перезапуск дев-сервера.
+
+**Утверждения — об инвариантах, а не о подсчёте ответов.** Ответ может
+потеряться на транспорте, а место при этом уже занято. Поэтому проверяется
+«строк в БД по ключу = 1» и «подтверждено + осталось = было мест», а оборванные
+соединения выводятся отдельной строкой. Дев-сервер — не для нагрузки; для
+серьёзных цифр нужен PHP-FPM или Octane.
+
+---
+
+## Observability
+
+События `HoldCreated` / `HoldConfirmed` / `HoldCancelled` отправляются после
+коммита; `LogHoldActivity` пишет структурированный лог (`hold.created` и т.д.)
+с `hold_id`, `slot_id`, `actor`, `status`. На эти же события удобно вешать
+оплату, письма и аналитику, не трогая `SlotService`.
+
+Метрики (`holds_conflict_total`, `cache_hit_rate`, `confirmation_latency`) не
+реализованы — это уже задача мониторинга, а не приложения; точки для них —
+те же события и `ApiException`.
+
+---
+
+## Rate limiting
+
+`POST /slots/{id}/hold` и остальные пишущие ручки ограничены — иначе клиент
+может занять все места. Лимиты в `config/booking.php`:
+
+```dotenv
+RATE_LIMIT_WRITES=10,1          # запросов,минут — разумное значение для прода
+RATE_LIMIT_AVAILABILITY=120,1
+```
+
+Обоих ключей в `.env.example` нет — их нужно дописать самому; без них берутся
+значения по умолчанию из `config/booking.php`: `60,1` для записи и `120,1` для
+чтения. Для записи стоит именно `60,1`, чтобы демонстрация гонки из README
+(30 параллельных запросов) не упиралась в `429`.
+
+---
+
+## Что не реализовано
+
+* **Аутентификация.** В задании её нет, поэтому `actor_key` строится из IP —
+  слабый идентификатор (общий NAT склеивает пользователей, прокси склеивает
+  всех). Ownership-проверка уже написана и работает с `user:{id}`, как только
+  auth появится: включить Sanctum, и `ActorKey` сам переключится. Для
+  полноценной схемы стоит также заменить `actor_key` на FK `user_id`.
+* **Фоновая очистка просроченных холдов** — по условию не требуется;
+  просроченные записи просто не попадают в скоуп `active()`.
+* **Метрики** — см. выше.
+* **Репозиторий поверх Eloquent** — сознательно нет: при одной сущности это
+  слой ради слоя. Кеш вынесен в `AvailabilityCacheService`, потому что у него своя
+  нетривиальная логика, а вот `HoldRepository` был бы обёрткой над `find()`.
