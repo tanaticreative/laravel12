@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use Illuminate\Contracts\Cache\Lock;
 use Illuminate\Contracts\Cache\LockTimeoutException;
 use Illuminate\Support\Facades\Cache;
 
@@ -42,16 +43,7 @@ class AvailabilityCacheService
         $lock = Cache::lock(self::LOCK_KEY, self::LOCK_TTL_SECONDS);
 
         if ($lock->get()) {
-            try {
-                // Someone may have published while we were acquiring the lock.
-                if (($cached = Cache::get(self::KEY)) !== null) {
-                    return $cached;
-                }
-
-                return $this->publish($resolver());
-            } finally {
-                $lock->release();
-            }
+            return $this->resolveHoldingLock($lock, $resolver);
         }
 
         // Another worker is recomputing. Stale data beats a queued query.
@@ -62,12 +54,39 @@ class AvailabilityCacheService
         // Cold cache with no stale copy: wait for the winner to publish.
         try {
             $lock->block(self::LOCK_WAIT_SECONDS);
-            $lock->release();
-
-            return Cache::get(self::KEY) ?? $this->publish($resolver());
         } catch (LockTimeoutException) {
             // The winner is wedged or slow; answer from the source directly.
             return $resolver();
+        }
+
+        // The wait handed us the lock, and we keep it: waiting is not proof
+        // that anything got published. The winner may have failed, or a write
+        // may have invalidated the entry in between, and then this worker has
+        // to resolve after all — which unlocked would let every waiter resolve
+        // at once, recreating the stampede this class exists to absorb.
+        return $this->resolveHoldingLock($lock, $resolver);
+    }
+
+    /**
+     * Resolve while owning `$lock`, releasing it on the way out.
+     *
+     * Both callers arrive here meaning the same thing — "the lock is mine now"
+     * — whether they took it outright or waited for it. Sharing the body keeps
+     * the two paths from drifting into different guarantees.
+     *
+     * @param  callable(): array  $resolver
+     */
+    private function resolveHoldingLock(Lock $lock, callable $resolver): array
+    {
+        try {
+            // Someone may have published while we were acquiring the lock.
+            if (($cached = Cache::get(self::KEY)) !== null) {
+                return $cached;
+            }
+
+            return $this->publish($resolver());
+        } finally {
+            $lock->release();
         }
     }
 
